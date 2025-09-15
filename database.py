@@ -7,10 +7,12 @@ import os
 load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
-
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
+try:
+    engine = create_engine(DATABASE_URL)
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    print (f"connection scussfully{DATABASE_URL}")
+except Exception as e:
+    print(str(e))
 Base = declarative_base()
 
 def get_db():
