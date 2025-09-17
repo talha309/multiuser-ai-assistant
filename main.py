@@ -43,4 +43,19 @@ def health():
         return {"status": "ok"}
     except Exception as e:
         return {"status": "degraded", "error": str(e)}
- 
+from fastapi import FastAPI
+from models import models
+from database import  database
+from routes.auth import router as auth_router
+from agent.chatbot import router as chat_router
+
+app = FastAPI()
+
+models.Base.metadata.create_all(bind=database.engine)
+
+app.include_router(auth_router)
+app.include_router(chat_router)
+
+@app.get("/")
+def root():
+    return {"msg": "Backend is running 🚀"}

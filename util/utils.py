@@ -5,7 +5,8 @@ from fastapi import HTTPException, status
 from dotenv import load_dotenv
 import os 
 load_dotenv()
-SECRET_KEY = os.getenv("SECRET_KEY")   # 👉 Change this to something secure
+# Use env SECRET_KEY if provided; otherwise fall back to a development default
+SECRET_KEY = os.getenv("SECRET_KEY") or "dev_secret_change_me"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
