@@ -28,9 +28,11 @@ class ChatState(TypedDict):
     search_results: List[Dict[str, Any]]
     assistant_response: str
     user_id: int
+    db: Session  # added db here
 
 # 🔹 LangGraph Nodes
-def save_user_message(state: ChatState, db: Session) -> ChatState:
+def save_user_message(state: ChatState) -> ChatState:
+    db = state["db"]
     user_msg = models.Message(role="user", content=state["user_message"], thread_id=state["thread_id"])
     db.add(user_msg)
     db.commit()
@@ -38,16 +40,22 @@ def save_user_message(state: ChatState, db: Session) -> ChatState:
 
 def perform_search(state: ChatState) -> ChatState:
     search_results = tavily_client.search(state["user_message"])
-    state["search_results"] = search_results["results"][:3]
+    state["search_results"] = search_results.get("results", [])[:3]
     return state
 
 def generate_response(state: ChatState) -> ChatState:
     context = "\n".join([res["title"] + ": " + res["url"] for res in state["search_results"]])
     response = model.generate_content(f"User asked: {state['user_message']}\n\nExtra context:\n{context}")
-    state["assistant_response"] = response.text
+
+    # safer parsing
+    try:
+        state["assistant_response"] = response.candidates[0].content.parts[0].text
+    except Exception:
+        state["assistant_response"] = "⚠️ Sorry, I couldn’t generate a proper response."
     return state
 
-def save_assistant_response(state: ChatState, db: Session) -> ChatState:
+def save_assistant_response(state: ChatState) -> ChatState:
+    db = state["db"]
     ai_msg = models.Message(role="assistant", content=state["assistant_response"], thread_id=state["thread_id"])
     db.add(ai_msg)
     db.commit()
@@ -57,10 +65,10 @@ def save_assistant_response(state: ChatState, db: Session) -> ChatState:
 def create_workflow():
     workflow = StateGraph(ChatState)
     
-    workflow.add_node("save_user_message", lambda state: save_user_message(state, state["db"]))
+    workflow.add_node("save_user_message", save_user_message)
     workflow.add_node("perform_search", perform_search)
     workflow.add_node("generate_response", generate_response)
-    workflow.add_node("save_assistant_response", lambda state: save_assistant_response(state, state["db"]))
+    workflow.add_node("save_assistant_response", save_assistant_response)
     
     workflow.set_entry_point("save_user_message")
     workflow.add_edge("save_user_message", "perform_search")
@@ -72,7 +80,10 @@ def create_workflow():
 
 # 🔹 Routes
 @router.post("/start", response_model=schemas.ThreadResponse)
-def start_thread(db: Session = Depends(database.get_db), current_user: models.User = Depends(get_current_user)):
+def start_thread(
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_user)
+):
     thread = models.Thread(user_id=current_user.id)
     db.add(thread)
     db.commit()
@@ -80,9 +91,17 @@ def start_thread(db: Session = Depends(database.get_db), current_user: models.Us
     return thread
 
 @router.post("/{thread_id}/message", response_model=schemas.ThreadResponse)
-def send_message(thread_id: int, msg: schemas.MessageCreate, db: Session = Depends(database.get_db), 
-                current_user: models.User = Depends(get_current_user)):
-    thread = db.query(models.Thread).filter(models.Thread.id == thread_id, models.Thread.user_id == current_user.id).first()
+def send_message(
+    thread_id: int,
+    msg: schemas.MessageCreate,
+    db: Session = Depends(database.get_db), 
+    current_user: models.User = Depends(get_current_user)
+):
+    thread = db.query(models.Thread).filter(
+        models.Thread.id == thread_id, 
+        models.Thread.user_id == current_user.id
+    ).first()
+
     if not thread:
         raise HTTPException(status_code=404, detail="Thread not found")
 
@@ -99,11 +118,13 @@ def send_message(thread_id: int, msg: schemas.MessageCreate, db: Session = Depen
         db=db
     )
     
-    final_state = workflow.invoke(initial_state)
-    
+    workflow.invoke(initial_state)
     db.refresh(thread)
     return thread
 
 @router.get("/threads", response_model=list[schemas.ThreadResponse])
-def get_threads(db: Session = Depends(database.get_db), current_user: models.User = Depends(get_current_user)):
+def get_threads(
+    db: Session = Depends(database.get_db), 
+    current_user: models.User = Depends(get_current_user)
+):
     return db.query(models.Thread).filter(models.Thread.user_id == current_user.id).all()
